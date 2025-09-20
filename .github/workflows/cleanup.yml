@@ -1,0 +1,104 @@
+name: Cleanup Resources
+
+on:
+  repository_dispatch:
+    types: [cleanup_job]
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID to cleanup'
+        required: true
+        type: string
+  schedule:
+    # Run cleanup every 4 hours to catch any orphaned jobs
+    - cron: '0 */4 * * *'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    permissions:
+      contents: write
+      actions: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Determine cleanup target
+      id: target
+      run: |
+        if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+          echo "JOB_ID=${{ github.event.client_payload.job_id }}" >> $GITHUB_OUTPUT
+          echo "MODE=single" >> $GITHUB_OUTPUT
+        elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_OUTPUT
+          echo "MODE=single" >> $GITHUB_OUTPUT
+        else
+          echo "MODE=batch" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Cleanup specific job
+      if: steps.target.outputs.MODE == 'single'
+      run: |
+        JOB_ID="${{ steps.target.outputs.JOB_ID }}"
+        
+        if [ -d "output/$JOB_ID" ]; then
+          echo "Cleaning up job: $JOB_ID"
+          rm -rf "output/$JOB_ID"
+          
+          # Commit removal
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git commit -m "Cleanup job $JOB_ID" || echo "Nothing to commit"
+          git push || echo "Nothing to push"
+          
+          echo "Job $JOB_ID cleaned up successfully"
+        else
+          echo "Job $JOB_ID not found or already cleaned up"
+        fi
+        
+    - name: Cleanup old jobs
+      if: steps.target.outputs.MODE == 'batch'
+      run: |
+        echo "Cleaning up old jobs (older than 24 hours)"
+        
+        CUTOFF_TIME=$(($(date +%s) - 86400)) # 24 hours ago
+        CLEANED_COUNT=0
+        
+        for job_dir in output/job_*; do
+          if [ -d "$job_dir" ]; then
+            JOB_TIMESTAMP=$(basename "$job_dir" | sed 's/job_//' | cut -d'_' -f1)
+            
+            # Check if timestamp is older than cutoff
+            if [[ "$JOB_TIMESTAMP" =~ ^[0-9]+$ ]] && [ "$JOB_TIMESTAMP" -lt "$CUTOFF_TIME" ]; then
+              echo "Cleaning up old job: $(basename $job_dir)"
+              rm -rf "$job_dir"
+              CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            fi
+          fi
+        done
+        
+        if [ $CLEANED_COUNT -gt 0 ]; then
+          echo "Cleaned up $CLEANED_COUNT old jobs"
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git commit -m "Cleanup $CLEANED_COUNT old transcoding jobs" || echo "Nothing to commit"
+          git push || echo "Nothing to push"
+        else
+          echo "No old jobs found to cleanup"
+        fi
+        
+    - name: Cancel running transcoding jobs if needed
+      run: |
+        # Cancel any long-running transcoding jobs (running more than 45 minutes)
+        echo "Checking for long-running jobs to cancel..."
+        
+        # This would require GitHub API calls to list and cancel workflow runs
+        # Implementation depends on your specific needs and GitHub API usage
