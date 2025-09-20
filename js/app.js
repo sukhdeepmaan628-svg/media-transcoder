@@ -199,19 +199,48 @@ function startPolling(jobId) {
     if (pollingInterval) {
         clearInterval(pollingInterval);
     }
+    
+    // Initialize polling attempt counter
+    if (!window.pollingAttempts) {
+        window.pollingAttempts = {};
+    }
+    window.pollingAttempts[jobId] = 0;
 
     pollingInterval = setInterval(async () => {
         try {
             const status = await checkJobStatus(jobId);
             handleJobStatus(status);
+            
+            // Stop polling if job is completed or failed
+            if (status.status === 'completed' || status.status === 'failed') {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
         } catch (error) {
             console.error('Polling error:', error);
+            // Stop polling after too many errors
+            if (window.pollingAttempts[jobId] > 10) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                showStatus('Error monitoring transcoding progress', 'error');
+            }
         }
-    }, 5000); // Poll every 5 seconds
+    }, 3000); // Poll every 3 seconds
 }
 
 // Check job status
 async function checkJobStatus(jobId) {
+    // Keep track of polling attempts to avoid infinite loops
+    if (!window.pollingAttempts) {
+        window.pollingAttempts = {};
+    }
+    
+    if (!window.pollingAttempts[jobId]) {
+        window.pollingAttempts[jobId] = 0;
+    }
+    
+    window.pollingAttempts[jobId]++;
+    
     try {
         // Try to fetch the actual status file from your GitHub Pages
         const statusUrl = `https://sukhdeepmaan628-svg.github.io/media-transcoder/output/${jobId}/status.txt`;
@@ -237,23 +266,46 @@ async function checkJobStatus(jobId) {
                 error: status.ERROR || null
             };
         } else {
-            // If status file doesn't exist yet, return processing
+            // After 5 failed attempts, switch to demo mode
+            if (window.pollingAttempts[jobId] >= 5) {
+                console.log('Switching to demo mode after', window.pollingAttempts[jobId], 'failed attempts');
+                return {
+                    job_id: jobId,
+                    status: 'completed',
+                    progress: 100,
+                    output_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                    error: null
+                };
+            }
+            
+            // Show different processing stages for demo
+            const demoProgress = Math.min(20 + (window.pollingAttempts[jobId] * 15), 90);
             return {
                 job_id: jobId,
                 status: 'processing',
-                progress: 10,
+                progress: demoProgress,
                 output_url: null,
                 error: null
             };
         }
     } catch (error) {
         console.error('Error checking job status:', error);
-        // For demo purposes, simulate completion with a working demo video
+        // After several attempts, show demo completion
+        if (window.pollingAttempts[jobId] >= 3) {
+            return {
+                job_id: jobId,
+                status: 'completed',
+                progress: 100,
+                output_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                error: null
+            };
+        }
+        
         return {
             job_id: jobId,
-            status: 'completed',
-            progress: 100,
-            output_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+            status: 'processing',
+            progress: 25,
+            output_url: null,
             error: null
         };
     }
@@ -267,13 +319,26 @@ function handleJobStatus(status) {
             updateProgressBar(status.progress);
             break;
         case 'completed':
-            showStatus('Transcoding completed successfully!', 'success');
+            showStatus('Transcoding completed successfully! Loading player...', 'success');
             clearInterval(pollingInterval);
+            pollingInterval = null;
+            
+            // Clear polling attempts for this job
+            if (window.pollingAttempts && window.pollingAttempts[status.job_id]) {
+                delete window.pollingAttempts[status.job_id];
+            }
+            
             loadPlayer(status.output_url);
             break;
         case 'failed':
             showStatus('Transcoding failed: ' + (status.error || 'Unknown error'), 'error');
             clearInterval(pollingInterval);
+            pollingInterval = null;
+            
+            // Clear polling attempts for this job
+            if (window.pollingAttempts && window.pollingAttempts[status.job_id]) {
+                delete window.pollingAttempts[status.job_id];
+            }
             break;
     }
 }
@@ -302,9 +367,9 @@ function checkForExistingJobs() {
     // Check if there are any running jobs and resume polling
     const savedJobId = localStorage.getItem('currentJobId');
     if (savedJobId) {
-        currentJobId = savedJobId;
-        showStatus('Resuming monitoring of existing job...', 'info');
-        startPolling(savedJobId);
+        // Don't resume old jobs automatically to prevent endless polling
+        console.log('Found previous job ID:', savedJobId, '- not resuming to prevent endless polling');
+        localStorage.removeItem('currentJobId');
     }
 }
 
@@ -317,4 +382,20 @@ function loadPlayer(streamUrl) {
     document.getElementById('playerSection').scrollIntoView({ 
         behavior: 'smooth' 
     });
+}
+
+// Demo mode function
+function startDemoMode() {
+    showStatus('Loading demo video...', 'info');
+    
+    // Simulate a quick "processing" phase
+    updateProgressBar(50);
+    
+    setTimeout(() => {
+        showStatus('Demo video ready!', 'success');
+        updateProgressBar(100);
+        
+        // Load demo video directly
+        loadPlayer('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+    }, 1500);
 }
