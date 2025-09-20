@@ -92,9 +92,11 @@ header h1 {
     background: white;
 }
 
-.upload-label:hover {
+.upload-label:hover,
+.upload-label.highlight {
     border-color: #2980b9;
     background: #f0f8ff;
+    transform: scale(1.02);
 }
 
 .upload-label span {
