@@ -1,0 +1,238 @@
+name: Media Transcoding
+
+on:
+  repository_dispatch:
+    types: [transcode_media]
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Job ID'
+        required: true
+        type: string
+      source:
+        description: 'Media source URL'
+        required: true
+        type: string
+      type:
+        description: 'Source type (url or file)'
+        required: true
+        type: string
+
+jobs:
+  transcode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    permissions:
+      contents: write
+      actions: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Set up variables
+      id: vars
+      run: |
+        if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+          echo "JOB_ID=${{ github.event.client_payload.job_id }}" >> $GITHUB_OUTPUT
+          echo "SOURCE=${{ github.event.client_payload.source }}" >> $GITHUB_OUTPUT
+          echo "TYPE=${{ github.event.client_payload.type }}" >> $GITHUB_OUTPUT
+          echo "FILENAME=${{ github.event.client_payload.filename }}" >> $GITHUB_OUTPUT
+        else
+          echo "JOB_ID=${{ github.event.inputs.job_id }}" >> $GITHUB_OUTPUT
+          echo "SOURCE=${{ github.event.inputs.source }}" >> $GITHUB_OUTPUT
+          echo "TYPE=${{ github.event.inputs.type }}" >> $GITHUB_OUTPUT
+          echo "FILENAME=" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Create output directory
+      run: |
+        mkdir -p output/${{ steps.vars.outputs.JOB_ID }}
+        
+    - name: Update status
+      run: |
+        echo "Processing started at $(date)" > output/${{ steps.vars.outputs.JOB_ID }}/status.txt
+        echo "STATUS=processing" >> output/${{ steps.vars.outputs.JOB_ID }}/status.txt
+        echo "PROGRESS=0" >> output/${{ steps.vars.outputs.JOB_ID }}/status.txt
+        
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        
+    - name: Install yt-dlp (for URL processing)
+      if: steps.vars.outputs.TYPE == 'url'
+      run: |
+        pip install yt-dlp
+        
+    - name: Download source media
+      id: download
+      run: |
+        set -e
+        
+        if [ "${{ steps.vars.outputs.TYPE }}" == "url" ]; then
+          echo "Downloading from URL: ${{ steps.vars.outputs.SOURCE }}"
+          
+          # Check if it's a direct media URL or needs yt-dlp
+          if [[ "${{ steps.vars.outputs.SOURCE }}" =~ \.(mp4|avi|mov|mkv|webm|flv|m4v|3gp|mp3|m4a|wav|flac)$ ]]; then
+            # Direct download
+            wget "${{ steps.vars.outputs.SOURCE }}" -O "input_media"
+          else
+            # Use yt-dlp for platforms like YouTube
+            yt-dlp -f "best[height<=1080]" "${{ steps.vars.outputs.SOURCE }}" -o "input_media.%(ext)s"
+            mv input_media.* input_media
+          fi
+        else
+          echo "Processing uploaded file"
+          # In a real implementation, you'd download the uploaded file from your storage
+          # For now, we'll create a placeholder
+          touch input_media
+        fi
+        
+        # Update status
+        echo "STATUS=processing" >> output/${{ steps.vars.outputs.JOB_ID }}/status.txt
+        echo "PROGRESS=25" >> output/${{ steps.vars.outputs.JOB_ID }}/status.txt
+        
+    - name: Probe media information
+      id: probe
+      run: |
+        set -e
+        
+        # Get media info
+        ffprobe -v quiet -print_format json -show_format -show_streams input_media > media_info.json
+        
+        # Extract key information
+        DURATION=$(jq -r '.format.duration // "0"' media_info.json)
+        VIDEO_STREAMS=$(jq '[.streams[] | select(.codec_type=="video")] | length' media_info.json)
+        AUDIO_STREAMS=$(jq '[.streams[] | select(.codec_type=="audio")] | length' media_info.json)
+        
+        echo "DURATION=$DURATION" >> $GITHUB_OUTPUT
+        echo "HAS_VIDEO=$([[ $VIDEO_STREAMS -gt 0 ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+        echo "HAS_AUDIO=$([[ $AUDIO_STREAMS -gt 0 ]] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
+        
+        echo "Media duration: ${DURATION}s, Video streams: $VIDEO_STREAMS, Audio streams: $AUDIO_STREAMS"
+        
+    - name: Transcode to HLS
+      id: transcode
+      run: |
+        set -e
+        
+        OUTPUT_DIR="output/${{ steps.vars.outputs.JOB_ID }}"
+        
+        # Update status
+        echo "STATUS=processing" >> ${OUTPUT_DIR}/status.txt
+        echo "PROGRESS=50" >> ${OUTPUT_DIR}/status.txt
+        
+        # FFmpeg transcoding with progress tracking
+        if [ "${{ steps.probe.outputs.HAS_VIDEO }}" == "true" ]; then
+          # Video transcoding to HLS with multiple qualities
+          ffmpeg -i input_media \
+            -c:v libx264 -preset medium -crf 23 \
+            -c:a aac -b:a 128k \
+            -f hls \
+            -hls_time 10 \
+            -hls_playlist_type vod \
+            -hls_segment_filename "${OUTPUT_DIR}/segment_%03d.ts" \
+            -master_pl_name "master.m3u8" \
+            -var_stream_map "v:0,a:0" \
+            -hls_segment_type mpegts \
+            "${OUTPUT_DIR}/playlist.m3u8" \
+            -progress progress.txt &
+        else
+          # Audio-only transcoding
+          ffmpeg -i input_media \
+            -c:a aac -b:a 128k \
+            -f hls \
+            -hls_time 10 \
+            -hls_playlist_type vod \
+            -hls_segment_filename "${OUTPUT_DIR}/segment_%03d.ts" \
+            "${OUTPUT_DIR}/playlist.m3u8" \
+            -progress progress.txt &
+        fi
+        
+        # Monitor progress
+        FFMPEG_PID=$!
+        
+        while kill -0 $FFMPEG_PID 2>/dev/null; do
+          if [ -f progress.txt ]; then
+            # Extract progress from FFmpeg output
+            CURRENT_TIME=$(tail -n 10 progress.txt | grep "out_time=" | tail -n 1 | sed 's/out_time=//' | sed 's/\..*//')
+            if [ ! -z "$CURRENT_TIME" ] && [ "${{ steps.probe.outputs.DURATION }}" != "0" ]; then
+              if [[ "$CURRENT_TIME" =~ ^[0-9]+$ ]]; then
+                PROGRESS=$((50 + (CURRENT_TIME * 40 / ${{ steps.probe.outputs.DURATION }})))
+                echo "STATUS=processing" >> ${OUTPUT_DIR}/status.txt
+                echo "PROGRESS=$PROGRESS" >> ${OUTPUT_DIR}/status.txt
+                echo "Transcoding progress: ${PROGRESS}%"
+              fi
+            fi
+          fi
+          sleep 5
+        done
+        
+        wait $FFMPEG_PID
+        
+        # Verify output
+        if [ -f "${OUTPUT_DIR}/playlist.m3u8" ]; then
+          echo "Transcoding completed successfully"
+          echo "STATUS=completed" >> ${OUTPUT_DIR}/status.txt
+          echo "PROGRESS=100" >> ${OUTPUT_DIR}/status.txt
+          echo "OUTPUT_URL=https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/output/${{ steps.vars.outputs.JOB_ID }}/playlist.m3u8" >> ${OUTPUT_DIR}/status.txt
+        else
+          echo "Transcoding failed - output file not found"
+          echo "STATUS=failed" >> ${OUTPUT_DIR}/status.txt
+          echo "ERROR=Output file not generated" >> ${OUTPUT_DIR}/status.txt
+          exit 1
+        fi
+        
+    - name: Create MP4 fallback
+      if: success()
+      run: |
+        OUTPUT_DIR="output/${{ steps.vars.outputs.JOB_ID }}"
+        
+        # Create a web-optimized MP4 as fallback
+        if [ "${{ steps.probe.outputs.HAS_VIDEO }}" == "true" ]; then
+          ffmpeg -i input_media \
+            -c:v libx264 -preset medium -crf 23 -maxrate 2M -bufsize 4M \
+            -c:a aac -b:a 128k \
+            -movflags +faststart \
+            "${OUTPUT_DIR}/fallback.mp4"
+        fi
+        
+    - name: Commit and push output
+      if: success()
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add output/${{ steps.vars.outputs.JOB_ID }}/
+        git commit -m "Add transcoded media for job ${{ steps.vars.outputs.JOB_ID }}" || exit 0
+        git push
+        
+    - name: Schedule cleanup
+      if: always()
+      run: |
+        # Schedule cleanup job to run in 2 hours
+        echo "Scheduling cleanup for job ${{ steps.vars.outputs.JOB_ID }} in 2 hours"
+        
+        # Create cleanup dispatch (you might want to use a proper scheduler)
+        sleep 2h && curl -X POST \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/repos/${{ github.repository }}/dispatches \
+          -d '{"event_type":"cleanup_job","client_payload":{"job_id":"${{ steps.vars.outputs.JOB_ID }}"}}' &
+        
+    - name: Handle failure
+      if: failure()
+      run: |
+        OUTPUT_DIR="output/${{ steps.vars.outputs.JOB_ID }}"
+        echo "STATUS=failed" >> ${OUTPUT_DIR}/status.txt
+        echo "ERROR=Transcoding workflow failed" >> ${OUTPUT_DIR}/status.txt
+        
+        # Still commit the status file
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add ${OUTPUT_DIR}/status.txt || true
+        git commit -m "Update status for failed job ${{ steps.vars.outputs.JOB_ID }}" || true
+        git push || true
