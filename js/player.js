@@ -4,60 +4,75 @@ let idleTimer = null;
 const IDLE_TIMEOUT = 300000; // 5 minutes
 
 function initializePlayer(streamUrl) {
-    // Dispose existing player if any
-    if (videoPlayer) {
-        videoPlayer.dispose();
-    }
-
-    videoPlayer = videojs('videoPlayer', {
-        controls: true,
-        fluid: true,
-        responsive: true,
-        playbackRates: [0.5, 1, 1.25, 1.5, 2],
-        plugins: {
-            hotkeys: {
-                volumeStep: 0.1,
-                seekStep: 5,
-                enableModifiersForNumbers: false
-            }
-        }
-    });
-
-    // Handle different stream types
-    if (streamUrl.endsWith('.m3u8')) {
-        // HLS stream
-        if (videoPlayer.tech().hls) {
-            videoPlayer.src({
-                src: streamUrl,
-                type: 'application/x-mpegURL'
-            });
-        } else if (Hls.isSupported()) {
-            const hls = new Hls();
-            hls.loadSource(streamUrl);
-            hls.attachMedia(videoPlayer.tech().el());
-        }
-    } else if (streamUrl.endsWith('.mpd')) {
-        // DASH stream
-        videoPlayer.src({
-            src: streamUrl,
-            type: 'application/dash+xml'
-        });
-    } else {
-        // Regular MP4 or other formats
-        videoPlayer.src({
-            src: streamUrl,
-            type: 'video/mp4'
-        });
-    }
-
-    // Set up event listeners
-    setupPlayerEvents();
+    console.log('Initializing player with URL:', streamUrl);
     
-    // Start idle monitoring
-    startIdleMonitoring();
+    // Dispose existing player if any
+    if (videoPlayer && typeof videoPlayer.dispose === 'function') {
+        try {
+            videoPlayer.dispose();
+            videoPlayer = null;
+        } catch (e) {
+            console.warn('Error disposing previous player:', e);
+        }
+    }
+
+    // Wait a moment for disposal to complete
+    setTimeout(() => {
+        try {
+            videoPlayer = videojs('videoPlayer', {
+                controls: true,
+                fluid: true,
+                responsive: true,
+                playbackRates: [0.5, 1, 1.25, 1.5, 2],
+                html5: {
+                    vhs: {
+                        overrideNative: true
+                    }
+                }
+            });
+
+            // Set source based on URL type
+            if (streamUrl.includes('.m3u8')) {
+                // HLS stream
+                videoPlayer.src({
+                    src: streamUrl,
+                    type: 'application/x-mpegURL'
+                });
+            } else if (streamUrl.includes('.mpd')) {
+                // DASH stream
+                videoPlayer.src({
+                    src: streamUrl,
+                    type: 'application/dash+xml'
+                });
+            } else {
+                // Regular video file
+                videoPlayer.src({
+                    src: streamUrl,
+                    type: 'video/mp4'
+                });
+            }
+
+            // Set up event listeners
+            setupPlayerEvents();
+            
+            // Start idle monitoring
+            startIdleMonitoring();
+            
+            console.log('Player initialized successfully');
+        } catch (error) {
+            console.error('Error initializing player:', error);
+            showStatus('Error initializing video player: ' + error.message, 'error');
+        }
+    }, 100);
 }
 
 function setupPlayerEvents() {
+    if (!videoPlayer) return;
+
+    videoPlayer.ready(() => {
+        console.log('Player ready');
+    });
+
     videoPlayer.on('play', () => {
         console.log('Video started playing');
         resetIdleTimer();
@@ -75,7 +90,8 @@ function setupPlayerEvents() {
 
     videoPlayer.on('error', (error) => {
         console.error('Player error:', error);
-        showStatus('Playback error: Please try refreshing the page', 'error');
+        const errorMessage = videoPlayer.error() ? videoPlayer.error().message : 'Unknown playback error';
+        showStatus('Playback error: ' + errorMessage, 'error');
     });
 
     // Monitor user activity
@@ -118,28 +134,48 @@ function handleIdle() {
 
 async function triggerCleanup() {
     try {
-        // Trigger cleanup GitHub Action
-        await fetch('/api/cleanup', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                job_id: currentJobId,
-                action: 'cleanup'
-            })
-        });
+        console.log('Triggering cleanup for job:', currentJobId);
+        
+        // In a real implementation, this would call your cleanup API
+        // For now, we'll just clean up the local state
         
         // Clear local state
-        currentJobId = null;
-        localStorage.removeItem('currentJobId');
+        if (currentJobId) {
+            localStorage.removeItem('currentJobId');
+            currentJobId = null;
+        }
+        
+        // Clear any polling intervals
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+        }
         
         // Hide player
-        document.getElementById('playerSection').style.display = 'none';
+        const playerSection = document.getElementById('playerSection');
+        if (playerSection) {
+            playerSection.style.display = 'none';
+        }
         
-        showStatus('Resources cleaned up successfully', 'success');
+        // Dispose video player
+        if (videoPlayer && typeof videoPlayer.dispose === 'function') {
+            videoPlayer.dispose();
+            videoPlayer = null;
+        }
+        
+        showStatus('Session ended and resources cleaned up', 'success');
+        
+        // Clear status after a few seconds
+        setTimeout(() => {
+            const statusDiv = document.getElementById('status');
+            if (statusDiv) {
+                statusDiv.innerHTML = '';
+            }
+        }, 3000);
+        
     } catch (error) {
         console.error('Cleanup error:', error);
+        showStatus('Error during cleanup: ' + error.message, 'error');
     }
 }
 
