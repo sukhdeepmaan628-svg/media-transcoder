@@ -72,6 +72,12 @@ async function processMediaUrl() {
         return;
     }
 
+    // Clear any existing polling
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+
     showStatus('Starting transcoding process...', 'info');
     await startTranscoding({ type: 'url', source: url });
 }
@@ -145,7 +151,16 @@ async function uploadFile(file) {
 // Start transcoding process
 async function startTranscoding(mediaData) {
     try {
+        // Clear any existing polling first
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+        }
+        
         currentJobId = generateJobId();
+        
+        // Store current job
+        localStorage.setItem('currentJobId', currentJobId);
         
         // Trigger GitHub Action via repository dispatch
         const response = await triggerGitHubAction(mediaData, currentJobId);
@@ -375,17 +390,39 @@ function checkForExistingJobs() {
 
 // Load video player
 function loadPlayer(streamUrl) {
-    document.getElementById('playerSection').style.display = 'block';
-    initializePlayer(streamUrl);
+    const playerSection = document.getElementById('playerSection');
+    if (playerSection) {
+        playerSection.style.display = 'block';
+    }
     
-    // Scroll to player
-    document.getElementById('playerSection').scrollIntoView({ 
-        behavior: 'smooth' 
-    });
+    // Initialize player with a small delay to ensure UI is ready
+    setTimeout(() => {
+        initializePlayer(streamUrl);
+        
+        // Scroll to player after a moment
+        setTimeout(() => {
+            if (playerSection) {
+                playerSection.scrollIntoView({ 
+                    behavior: 'smooth' 
+                });
+            }
+        }, 500);
+    }, 100);
 }
 
 // Demo mode function
 function startDemoMode() {
+    // Clear any existing jobs first
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+    
+    if (currentJobId) {
+        currentJobId = null;
+        localStorage.removeItem('currentJobId');
+    }
+    
     showStatus('Loading demo video...', 'info');
     
     // Simulate a quick "processing" phase
@@ -396,6 +433,8 @@ function startDemoMode() {
         updateProgressBar(100);
         
         // Load demo video directly
-        loadPlayer('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+        setTimeout(() => {
+            loadPlayer('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+        }, 500);
     }, 1500);
 }
