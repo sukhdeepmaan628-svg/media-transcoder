@@ -17,6 +17,15 @@
         </header>
 
         <div class="upload-section">
+            <div class="demo-section">
+                <button id="demoButton" class="demo-button" onclick="startDemoMode()">
+                    🎬 Try Demo Video
+                </button>
+                <small>Click to see the player in action with a sample video</small>
+            </div>
+            
+            <div class="divider">OR</div>
+            
             <div class="input-group">
                 <input type="url" id="mediaUrl" placeholder="Paste media URL here..." />
                 <button id="processUrl" onclick="processMediaUrl()">Process URL</button>
