@@ -6,19 +6,40 @@ const IDLE_TIMEOUT = 300000; // 5 minutes
 function initializePlayer(streamUrl) {
     console.log('Initializing player with URL:', streamUrl);
     
-    // Dispose existing player if any
-    if (videoPlayer && typeof videoPlayer.dispose === 'function') {
+    // Dispose existing player completely
+    if (videoPlayer) {
         try {
             videoPlayer.dispose();
-            videoPlayer = null;
+            console.log('Previous player disposed');
         } catch (e) {
             console.warn('Error disposing previous player:', e);
         }
+        videoPlayer = null;
     }
 
-    // Wait a moment for disposal to complete
+    // Reset the video element
+    const videoElement = document.getElementById('videoPlayer');
+    if (!videoElement) {
+        console.error('Video element not found!');
+        return;
+    }
+
+    // Clear any existing video.js classes and data
+    videoElement.className = 'video-js vjs-default-skin';
+    videoElement.removeAttribute('data-vjs-player');
+    
+    // Remove any existing sources
+    videoElement.innerHTML = `
+        <p class="vjs-no-js">
+            To view this video please enable JavaScript, and consider upgrading to a web browser that
+            <a href="https://videojs.com/html5-video-support/" target="_blank">supports HTML5 video</a>.
+        </p>
+    `;
+
+    // Wait for DOM to update, then initialize
     setTimeout(() => {
         try {
+            console.log('Creating new Video.js player');
             videoPlayer = videojs('videoPlayer', {
                 controls: true,
                 fluid: true,
@@ -28,50 +49,52 @@ function initializePlayer(streamUrl) {
                     vhs: {
                         overrideNative: true
                     }
-                }
+                },
+                techOrder: ['html5']
             });
 
-            // Set source based on URL type
-            if (streamUrl.includes('.m3u8')) {
-                // HLS stream
-                videoPlayer.src({
-                    src: streamUrl,
-                    type: 'application/x-mpegURL'
-                });
-            } else if (streamUrl.includes('.mpd')) {
-                // DASH stream
-                videoPlayer.src({
-                    src: streamUrl,
-                    type: 'application/dash+xml'
-                });
-            } else {
-                // Regular video file
-                videoPlayer.src({
-                    src: streamUrl,
-                    type: 'video/mp4'
-                });
-            }
+            videoPlayer.ready(() => {
+                console.log('Player ready, setting source');
+                
+                // Set source based on URL type
+                if (streamUrl.includes('.m3u8')) {
+                    // HLS stream
+                    videoPlayer.src({
+                        src: streamUrl,
+                        type: 'application/x-mpegURL'
+                    });
+                } else if (streamUrl.includes('.mpd')) {
+                    // DASH stream
+                    videoPlayer.src({
+                        src: streamUrl,
+                        type: 'application/dash+xml'
+                    });
+                } else {
+                    // Regular video file
+                    videoPlayer.src({
+                        src: streamUrl,
+                        type: 'video/mp4'
+                    });
+                }
 
-            // Set up event listeners
-            setupPlayerEvents();
+                // Set up event listeners
+                setupPlayerEvents();
+                
+                // Start idle monitoring
+                startIdleMonitoring();
+                
+                console.log('Player initialized successfully');
+            });
             
-            // Start idle monitoring
-            startIdleMonitoring();
-            
-            console.log('Player initialized successfully');
         } catch (error) {
             console.error('Error initializing player:', error);
             showStatus('Error initializing video player: ' + error.message, 'error');
         }
-    }, 100);
+    }, 200);
 }
 
 function setupPlayerEvents() {
     if (!videoPlayer) return;
-
-    videoPlayer.ready(() => {
-        console.log('Player ready');
-    });
 
     videoPlayer.on('play', () => {
         console.log('Video started playing');
