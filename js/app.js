@@ -159,6 +159,9 @@ async function startTranscoding(mediaData) {
         
         currentJobId = generateJobId();
         
+        // Store the original media data globally so we can access it later
+        window.currentJobData = mediaData;
+        
         // Store current job
         localStorage.setItem('currentJobId', currentJobId);
         
@@ -281,14 +284,18 @@ async function checkJobStatus(jobId) {
                 error: status.ERROR || null
             };
         } else {
-            // After 5 failed attempts, switch to demo mode
+            // After 5 failed attempts, switch to direct playback of user's URL
             if (window.pollingAttempts[jobId] >= 5) {
-                console.log('Switching to demo mode after', window.pollingAttempts[jobId], 'failed attempts');
+                console.log('Switching to direct playback after', window.pollingAttempts[jobId], 'failed attempts');
+                
+                // Get the original source URL from the job data
+                const originalUrl = window.currentJobData ? window.currentJobData.source : null;
+                
                 return {
                     job_id: jobId,
                     status: 'completed',
                     progress: 100,
-                    output_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                    output_url: originalUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
                     error: null
                 };
             }
@@ -305,13 +312,14 @@ async function checkJobStatus(jobId) {
         }
     } catch (error) {
         console.error('Error checking job status:', error);
-        // After several attempts, show demo completion
+        // After several attempts, try direct playback
         if (window.pollingAttempts[jobId] >= 3) {
+            const originalUrl = window.currentJobData ? window.currentJobData.source : null;
             return {
                 job_id: jobId,
                 status: 'completed',
                 progress: 100,
-                output_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+                output_url: originalUrl || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
                 error: null
             };
         }
@@ -334,7 +342,17 @@ function handleJobStatus(status) {
             updateProgressBar(status.progress);
             break;
         case 'completed':
-            showStatus('Transcoding completed successfully! Loading player...', 'success');
+            if (window.currentJobData && window.currentJobData.source !== 'demo') {
+                // Check if we're using the original URL or demo
+                if (status.output_url === window.currentJobData.source) {
+                    showStatus('GitHub Actions not configured - attempting direct playback...', 'info');
+                } else {
+                    showStatus('Transcoding completed successfully! Loading player...', 'success');
+                }
+            } else {
+                showStatus('Demo video ready! Loading player...', 'success');
+            }
+            
             clearInterval(pollingInterval);
             pollingInterval = null;
             
@@ -422,6 +440,9 @@ function startDemoMode() {
         currentJobId = null;
         localStorage.removeItem('currentJobId');
     }
+    
+    // Set demo data
+    window.currentJobData = { type: 'demo', source: 'demo' };
     
     showStatus('Loading demo video...', 'info');
     
