@@ -78,6 +78,7 @@ async function processMediaUrl() {
         pollingInterval = null;
     }
 
+    console.log('Processing URL:', url);
     showStatus('Starting transcoding process...', 'info');
     await startTranscoding({ type: 'url', source: url });
 }
@@ -161,6 +162,13 @@ async function startTranscoding(mediaData) {
         
         // Store the original media data globally so we can access it later
         window.currentJobData = mediaData;
+        console.log('Stored job data:', window.currentJobData);
+        
+        // Update debug info
+        const debugInfo = document.getElementById('debugInfo');
+        if (debugInfo) {
+            debugInfo.textContent = `Stored URL: ${mediaData.source.substring(0, 50)}...`;
+        }
         
         // Store current job
         localStorage.setItem('currentJobId', currentJobId);
@@ -287,9 +295,11 @@ async function checkJobStatus(jobId) {
             // After 5 failed attempts, switch to direct playback of user's URL
             if (window.pollingAttempts[jobId] >= 5) {
                 console.log('Switching to direct playback after', window.pollingAttempts[jobId], 'failed attempts');
+                console.log('Original job data:', window.currentJobData);
                 
                 // Get the original source URL from the job data
                 const originalUrl = window.currentJobData ? window.currentJobData.source : null;
+                console.log('Using original URL:', originalUrl);
                 
                 return {
                     job_id: jobId,
